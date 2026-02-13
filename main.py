@@ -4,6 +4,9 @@ from datetime import datetime
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import TimeoutException, NoSuchElementException
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 
 # -----------------------------
@@ -23,7 +26,7 @@ posted_products = set()
 # Multiple categories support
 CATEGORY_URLS = [
     "https://www.sheinindia.in/c/sverse-5939-37961",
-    # Add more categories if needed
+    # Add more categories here if needed
 ]
 
 # -----------------------------
@@ -44,10 +47,18 @@ driver = webdriver.Chrome(options=chrome_options)
 def fetch_products(category_url):
     try:
         driver.get(category_url)
-        time.sleep(5)  # wait for JS to load
+        print(f"Accessing category: {category_url}")
+        time.sleep(7)  # wait for JS to load
+
+        try:
+            items = WebDriverWait(driver, 10).until(
+                EC.presence_of_all_elements_located((By.CSS_SELECTOR, "a[href*='/product/']"))
+            )
+        except TimeoutException:
+            print("No products found in this category.")
+            return []
 
         products = []
-        items = driver.find_elements(By.CSS_SELECTOR, "a[href*='/product/']")
 
         for item in items:
             try:
@@ -58,7 +69,7 @@ def fetch_products(category_url):
 
             try:
                 name = item.find_element(By.CSS_SELECTOR, "div.product-item__name").text
-            except:
+            except NoSuchElementException:
                 name = "Unknown Product"
 
             try:
@@ -114,7 +125,6 @@ print("PREMIUM BOT STARTED ✅")
 while True:
     try:
         for category_url in CATEGORY_URLS:
-            print("Fetching category:", category_url)
             products = fetch_products(category_url)
             print(f"Found {len(products)} products in this category.")
 
@@ -125,7 +135,6 @@ while True:
                     time.sleep(2)
 
         time.sleep(60)  # check every 60 seconds
-
     except Exception as e:
         print("Main Loop Error:", e)
         time.sleep(30)
