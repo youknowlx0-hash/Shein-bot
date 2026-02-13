@@ -1,89 +1,121 @@
 import os
 import time
-import requests
-from telegram import Bot
 from datetime import datetime
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 
+# -----------------------------
+# CONFIG
+# -----------------------------
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
-SEARCH_API_KEY = os.getenv("SEARCH_API_KEY")  # API key required
+PRICE_THRESHOLD = float(os.getenv("PRICE_THRESHOLD") or 1000)  # Only alert below price
 
-if not BOT_TOKEN or not CHANNEL_ID or not SEARCH_API_KEY:
-    print("Missing required environment variables!")
+if not BOT_TOKEN or not CHANNEL_ID:
+    print("Missing BOT_TOKEN or CHANNEL_ID")
     exit()
 
 bot = Bot(token=BOT_TOKEN)
 posted_products = set()
+CATEGORY_URL = "https://www.sheinindia.in/c/sverse-5939-37961"
 
-# API Config
-SEARCH_API_URL = "https://api.searchapi.io/api/v1/search"
-CATEGORY_KEYWORD = "sverse 5939"
+# -----------------------------
+# Selenium Headless Setup
+# -----------------------------
+chrome_options = Options()
+chrome_options.add_argument("--headless")
+chrome_options.add_argument("--no-sandbox")
+chrome_options.add_argument("--disable-dev-shm-usage")
+chrome_options.add_argument("--disable-gpu")
 
+driver = webdriver.Chrome(options=chrome_options)
+
+# -----------------------------
+# Fetch Products
+# -----------------------------
 def fetch_products():
-    params = {
-        "engine": "shein_search",
-        "q": CATEGORY_KEYWORD,
-        "api_key": SEARCH_API_KEY
-    }
-
     try:
-        r = requests.get(SEARCH_API_URL, params=params, timeout=10)
-        data = r.json()
+        driver.get(CATEGORY_URL)
+        time.sleep(5)  # wait for JS
 
         products = []
-        if "products" in data:
-            for p in data["products"]:
-                pid = p.get("product_id") or p.get("id")
-                name = p.get("title") or "Unknown Product"
-                link = p.get("product_url") or p.get("url")
-                price = p.get("price") or "N/A"
-                image = p.get("thumbnail_url") or p.get("image_url")
+        items = driver.find_elements(By.CSS_SELECTOR, "a[href*='/product/']")
 
-                products.append({
-                    "id": pid,
-                    "name": name,
-                    "link": link,
-                    "price": price,
-                    "image": image
-                })
+        for item in items:
+            link = item.get_attribute("href")
+            product_id = link.split("/")[-1]
 
+            try:
+                name = item.find_element(By.CSS_SELECTOR, "div.product-item__name").text
+            except:
+                name = "Unknown Product"
+
+            try:
+                price_text = item.find_element(By.CSS_SELECTOR, "div.product-item__price-current").text
+                price = float(price_text.replace("₹","").replace(",","").strip())
+            except:
+                price = 0
+
+            try:
+                image = item.find_element(By.TAG_NAME, "img").get_attribute("src")
+            except:
+                image = None
+
+            products.append({
+                "id": product_id,
+                "name": name,
+                "price": price,
+                "link": link,
+                "image": image
+            })
         return products
     except Exception as e:
-        print("API Fetch Error:", e)
+        print("Fetch Error:", e)
         return []
 
-
+# -----------------------------
+# Send Telegram Alert
+# -----------------------------
 def send_alert(prod):
     caption = f"""
 🆕 NEW DROP
 🛍 {prod['name']}
 🆔 Product ID: {prod['id']}
 💰 Price: Rs.{prod['price']}
-🔗 {prod['link']}
-
 ⏰ {datetime.now().strftime('%I:%M:%S %p')}
 """
 
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("View Product", url=prod['link'])]
+    ])
+
     try:
-        bot.send_photo(
-            chat_id=CHANNEL_ID,
-            photo=prod["image"],
-            caption=caption
-        )
+        if prod['image']:
+            bot.send_photo(chat_id=CHANNEL_ID, photo=prod['image'], caption=caption, reply_markup=keyboard)
+        else:
+            bot.send_message(chat_id=CHANNEL_ID, text=caption, reply_markup=keyboard)
     except Exception as e:
         print("Telegram Error:", e)
 
-
-print("BOT STARTED SUCCESSFULLY")
+# -----------------------------
+# MAIN LOOP
+# -----------------------------
+print("PREMIUM BOT STARTED ✅")
 
 while True:
-    products = fetch_products()
-    print("FOUND PRODUCTS:", len(products))
+    try:
+        products = fetch_products()
+        print(f"Found Products: {len(products)}")
 
-    for p in products:
-        if p["id"] not in posted_products:
-            send_alert(p)
-            posted_products.add(p["id"])
-            time.sleep(2)
+        for p in products:
+            if p['id'] not in posted_products and p['price'] <= PRICE_THRESHOLD:
+                send_alert(p)
+                posted_products.add(p['id'])
+                time.sleep(2)
 
-    time.sleep(60)
+        time.sleep(10)  # check every 10 seconds
+    except Exception as e:
+        print("Main Loop Error:", e)
+        time.sleep(10)
