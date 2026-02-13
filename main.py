@@ -1,14 +1,7 @@
 import os
 import time
+import requests
 from datetime import datetime
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, NoSuchElementException
-from webdriver_manager.chrome import ChromeDriverManager
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 
 # -----------------------------
@@ -17,73 +10,43 @@ from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 PRICE_THRESHOLD = float(os.getenv("PRICE_THRESHOLD") or 1000)  # Only alert below this price
+API_KEY = os.getenv("API_KEY")  # Your searchapi.io or Shein API key
 
-if not BOT_TOKEN or not CHANNEL_ID:
-    print("Missing BOT_TOKEN or CHANNEL_ID")
+if not BOT_TOKEN or not CHANNEL_ID or not API_KEY:
+    print("Missing BOT_TOKEN, CHANNEL_ID or API_KEY")
     exit()
 
 bot = Bot(token=BOT_TOKEN)
 posted_products = set()
 
-# Multiple categories support
-CATEGORY_URLS = [
-    "https://www.sheinindia.in/c/sverse-5939-37961",
-    # Add more categories here if needed
+# Multiple categories / search queries
+CATEGORY_QUERIES = [
+    "sverse 5939-37961",
+    # Add more queries if needed
 ]
 
-# -----------------------------
-# Selenium Headless Setup with ChromeDriverManager
-# -----------------------------
-chrome_options = Options()
-chrome_options.add_argument("--headless")
-chrome_options.add_argument("--no-sandbox")
-chrome_options.add_argument("--disable-dev-shm-usage")
-chrome_options.add_argument("--disable-gpu")
-chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-
-driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
+API_URL = "https://api.searchapi.io/api/v1/search"  # example API endpoint
 
 # -----------------------------
-# Fetch Products
+# Fetch Products via API
 # -----------------------------
-def fetch_products(category_url):
+def fetch_products(query):
     try:
-        driver.get(category_url)
-        print(f"Accessing category: {category_url}")
-        time.sleep(7)  # wait for JS to load
-
-        try:
-            items = WebDriverWait(driver, 10).until(
-                EC.presence_of_all_elements_located((By.CSS_SELECTOR, "a[href*='/product/']"))
-            )
-        except TimeoutException:
-            print("No products found in this category.")
-            return []
+        params = {
+            "engine": "shein_search",
+            "q": query,
+            "api_key": API_KEY
+        }
+        response = requests.get(API_URL, params=params, timeout=10)
+        data = response.json()
 
         products = []
-
-        for item in items:
-            try:
-                link = item.get_attribute("href")
-                product_id = link.split("/")[-1]
-            except:
-                continue
-
-            try:
-                name = item.find_element(By.CSS_SELECTOR, "div.product-item__name").text
-            except NoSuchElementException:
-                name = "Unknown Product"
-
-            try:
-                price_text = item.find_element(By.CSS_SELECTOR, "div.product-item__price-current").text
-                price = float(price_text.replace("₹","").replace(",","").strip())
-            except:
-                price = 0
-
-            try:
-                image = item.find_element(By.TAG_NAME, "img").get_attribute("src")
-            except:
-                image = None
+        for item in data.get("products", []):
+            product_id = item.get("id") or item.get("product_id")
+            name = item.get("name") or "Unknown Product"
+            price = float(item.get("price", 0))
+            link = item.get("link") or item.get("url")
+            image = item.get("image") or item.get("image_url")
 
             products.append({
                 "id": product_id,
@@ -94,7 +57,7 @@ def fetch_products(category_url):
             })
         return products
     except Exception as e:
-        print("Fetch Error:", e)
+        print("API Fetch Error:", e)
         return []
 
 # -----------------------------
@@ -122,13 +85,13 @@ def send_alert(prod):
 # -----------------------------
 # MAIN LOOP
 # -----------------------------
-print("PREMIUM BOT STARTED ✅")
+print("API-based Premium Bot Started ✅")
 
 while True:
     try:
-        for category_url in CATEGORY_URLS:
-            products = fetch_products(category_url)
-            print(f"Found {len(products)} products in this category.")
+        for query in CATEGORY_QUERIES:
+            products = fetch_products(query)
+            print(f"Found {len(products)} products for query: {query}")
 
             for p in products:
                 if p['id'] not in posted_products and p['price'] <= PRICE_THRESHOLD:
@@ -137,6 +100,7 @@ while True:
                     time.sleep(2)
 
         time.sleep(60)  # check every 60 seconds
+
     except Exception as e:
         print("Main Loop Error:", e)
         time.sleep(30)
